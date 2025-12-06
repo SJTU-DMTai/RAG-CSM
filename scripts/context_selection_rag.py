@@ -28,7 +28,7 @@ if __name__ == '__main__':
         'e5': f'{root_dir}/ckpt/e5-base-v2',
         'llama3-8B-instruct': f'{root_dir}/ckpt/Llama-3.1-8B-Instruct',
         'bert': f'{root_dir}/ckpt/bert-base-uncased',
-        'csm': f'{root_dir}/ckpt/csm/{data_name}_{gen_dir}_csm_st',
+        'csm': f'{root_dir}/ckpt/csm/{data_name}_{gen_dir}',
     }
 
     system_prompt, user_prompt, max_new_tokens, metrics, gen_batch_size = \

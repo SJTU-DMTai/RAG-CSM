@@ -6,3 +6,4 @@ build/
 dist/*
 upload_pypi.sh
 tests/*
+.DS_Store
