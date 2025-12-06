@@ -2,16 +2,10 @@ from typing import List
 from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 from flashrag.retriever.encoder import Encoder
 from tqdm import tqdm
-import re
 import torch
 import numpy as np
-import itertools
 import os
 import json
-import torch.nn as nn
-import sklearn
-from utils import *
-import re
 
 
 class BaseRefiner:
@@ -295,61 +289,19 @@ class AbstractiveRecompRefiner(BaseRefiner):
         return results
 
 
-class RandomRefiner(BaseRefiner):
-    """Implementation for Extractive compressor.
-    Using retrieval method to select sentences or other granularity data.
-    """
-
-    def __init__(self, config):
-        super().__init__(config)
-        self.topk = config["refiner_topk"]
-
-    def batch_run(self, dataset):
-        # only use text
-        retrieval_results = dataset.retrieval_result
-        retrieval_results = [
-            ["\n".join(doc_item["contents"].split("\n")[1:]) for doc_item in item_result]
-            for item_result in retrieval_results
-        ]
-        # random select topk sents
-        decending = False if self.topk > 0 else True
-        topk = abs(self.topk)
-        retain_lists = []
-        for retrieval_result in retrieval_results:
-            if len(retrieval_result) < topk:
-                retain_lists.append(retrieval_result)
-                continue
-            select_idxs = np.random.choice(len(retrieval_result), topk, replace=False)
-            if decending:
-                # shuffle retrieval_result
-                select_idxs = np.random.permutation(len(retrieval_result))[:topk]
-            retain_lists.append([retrieval_result[idx] for idx in select_idxs if idx < len(retrieval_result)])
-
-        return ["\n".join(sents) for sents in retain_lists]
-
-
 class CIRefiner(BaseRefiner):
     """
     CI: compute Contextual Influence score for each context.
     """
     def __init__(self, config, generator, prompt_template):
-        # from flashrag.refiner.list_selector import ListSelector
-        from flashrag.refiner.list_selector_new import ListSelector
         super().__init__(config)
         self.config = config
         self.generator = generator
         self.prompt_template = prompt_template
         self.ci_score_path = config["refiner_score_path"]
-        self.granularity = config["refiner_granularity"]
-        if config['use_selector'] or config['refiner_train']:
-            self.list_seletor = ListSelector(config, generator=self.generator, prompt_template=self.prompt_template)
-        else:
-            self.list_seletor = None
 
-    def get_context_score(self, dataset, context_lists, batch_size=16):
-        questions = dataset.question
-        golden_answers = dataset.golden_answers
-        ci_score = []
+    def get_context_score(self, questions, golden_answers, context_lists, batch_size=16):
+        ci_scores = []
 
         for idx in tqdm(range(0, len(questions), batch_size), desc="Refining process: "):
             batch_questions = questions[idx: idx + batch_size]
@@ -359,10 +311,6 @@ class CIRefiner(BaseRefiner):
                 self.prompt_template.get_string(question=q, retrieval_result=r)
                 for q, r in zip(batch_questions, batch_contexts)
             ]
-            # total_prompts = [
-            #     self.prompt_template.get_string(question=q, retrieval_result=[''])
-            #     for q in batch_questions
-            # ]
             with torch.no_grad():
                 torch.cuda.empty_cache()
                 total_score = self.generator.cal_pred_loss(total_prompts, batch_golden_answers)
@@ -373,182 +321,104 @@ class CIRefiner(BaseRefiner):
                     new_context = batch_contexts[i][: j] + batch_contexts[i][j + 1:]
                     new_prompt = self.prompt_template.get_string(
                         question=batch_questions[i], retrieval_result=new_context)
-                    # new_prompt = self.prompt_template.get_string(
-                    #     question=batch_questions[i], retrieval_result=[batch_contexts[i][j]])
                     new_prompts_per_question.append(new_prompt)
                 with torch.no_grad():
                     torch.cuda.empty_cache()
                     new_score = self.generator.cal_pred_loss(new_prompts_per_question, golden_answers_per_question)
-                    ci_score.append([new_score[j] - total_score[i] for j in range(len(new_score))])
-                    # ci_score.append([total_score[i] - new_score[j] for j in range(len(new_score))])
-                json.dump({'ci': ci_score}, open(self.ci_score_path, "w"))
-        return {'ci': ci_score}
+                    ci_scores.append([new_score[j] - total_score[i] for j in range(len(new_score))])
+            json.dump(ci_scores, open(self.ci_score_path, "w"))
+        return ci_scores
 
-    def train_selector(self, dataset, refiner_selector=None, trunc_idx=-1):
+    def batch_run(self, dataset, batch_size=16, topk=None):
         retrieval_results = dataset.retrieval_result
-        retrieval_results = [
+        context_lists = [
             ["\n".join(doc_item["contents"].split("\n")[1:]) for doc_item in item_result]
             for item_result in retrieval_results
         ]
-        if self.granularity == 'chunk':
-            context_lists = retrieval_results
-        elif self.granularity == 'sentence':
-            context_lists = []
-            for retrieval_result in retrieval_results:
-                sents = []
-                for res in retrieval_result:
-                    sents.extend([i.strip() for i in re.split(r"(?<=[.!?])\s+", res) if len(i.strip().split()) > 5])
-                context_lists.append(sents)
-        else:
-            raise NotImplementedError
 
-        if 'sft' in refiner_selector:
-            if os.path.exists(self.ci_score_path):
-                ci_score = json.load(open(self.ci_score_path, "r"))
-            else:
-                ci_score = self.get_context_score(dataset, context_lists, self.generator)
-                json.dump(ci_score, open(self.ci_score_path, "w"))
-            if type(ci_score) == dict:
-                ci_score = ci_score['ci']
-            train_data = [dataset.question, context_lists, ci_score[: trunc_idx]]
-        elif 'e2e' in refiner_selector:
-            train_data = [dataset.question, context_lists, dataset.golden_answers]
-        else:
-            raise NotImplementedError
-        self.list_seletor.fit(train_data)
-
-    def batch_run(self, dataset, use_selector=False, batch_size=16, topk=None):
-        retrieval_results = dataset.retrieval_result
-        retrieval_results = [
-            ["\n".join(doc_item["contents"].split("\n")[1:]) for doc_item in item_result]
-            for item_result in retrieval_results
-        ]
-        if self.granularity == 'chunk':
-            context_lists = retrieval_results
-        elif self.granularity == 'sentence':
-            context_lists = []
-            for retrieval_result in retrieval_results:
-                sents = []
-                for res in retrieval_result:
-                    sents.extend([i.strip() for i in re.split(r"(?<=[.!?])\s+", res) if len(i.strip().split()) > 5])
-                context_lists.append(sents)
-        else:
-            raise NotImplementedError
-
-        if not use_selector:
-            if os.path.exists(self.ci_score_path):
-                context_score = json.load(open(self.ci_score_path, "r"))
-            else:
-                context_score = self.get_context_score(dataset, context_lists, batch_size)
-                json.dump(context_score, open(self.ci_score_path, "w"))
+        if os.path.exists(self.ci_score_path):
+            context_score = json.load(open(self.ci_score_path, "r"))
             if type(context_score) == dict:
                 for k, v in context_score.items():
                     context_score = v
         else:
-            # context_score = json.load(open(self.ci_score_path, "r"))
-            # if type(context_score) == dict:
-            #     context_score = context_score['ce']
-            # test_loss, test_sign_loss = self.list_seletor.get_test_mse([dataset.question, context_lists, context_score], batch_size=32)
-            # print(f"Test Loss: {test_loss}, Test Sign Loss: {test_sign_loss}")
-            ci_score = json.load(open(self.ci_score_path, "r"))
-            if type(ci_score) == dict:
-                for k, v in ci_score.items():
-                    ci_score = v
-            # context_score = self.list_seletor.predict([dataset.question, context_lists], batch_size=32)
-            context_score = self.list_seletor.predict([dataset.question, context_lists], ci_score, batch_size=32)
+            context_score = self.get_context_score(dataset.question, dataset.golden_answers, context_lists, batch_size)
+            json.dump(context_score, open(self.ci_score_path, "w"))
 
         # context selection based on ci_score
-        retain_lists = []
-        retain_scores = []
         if self.config['test_sample_num']:
             context_score = context_score[:self.config['test_sample_num']]
             context_lists = context_lists[:self.config['test_sample_num']]
         # TODO a mistake during labeling, remember to fix it
-        if len(context_score) == len(context_lists) - 1:
+        if len(context_score) == len(dataset) - 1:
             context_score.append([0.] * len(context_lists[-1]))
         dataset.update_output('refine_score', context_score)
+
+        retain_lists = []
         for context_scores, context_list in zip(context_score, context_lists):
             assert len(context_scores) == len(context_list)
-            # sort contexts according to context_scores, and select topk
+            # sort contexts according to context_scores, and select topk if topk is not None
             if topk is None:
                 select_idxs = [idx for idx, score in enumerate(context_scores) if score > 0]
                 retain_lists.append([context_list[idx] for idx in select_idxs if idx < len(context_list)])
             else:
                 if topk == 0:
                     retain_lists.append([])
-                    retain_scores.append(0)
                 else:
                     if topk > 0:
                         select_idxs = torch.topk(torch.Tensor(context_scores), min(topk, len(context_scores))).indices.tolist()
                     else:
                         select_idxs = torch.topk(torch.Tensor([-score for score in context_scores]), min(abs(topk), len(context_scores))).indices.tolist()
                     retain_lists.append([context_list[idx] for idx in select_idxs if idx < len(context_list)])
-                    retain_scores.append(context_scores[select_idxs[-1]])
-        if retain_scores:
-            print(f"Retain Score: {sum(retain_scores) / len(retain_scores)}")
         res = ["\n".join(contexts) for contexts in retain_lists]
         # TODO a mistake during labeling, remember to fix it
-        if len(res) == len(context_lists) - 1:
+        if len(res) == len(dataset) - 1:
             res.append("")
         return res
 
-class RankGPTRefiner(BaseRefiner):
-    """Implementation for list-wise RankGPT
+
+class CSMRefiner(BaseRefiner):
     """
-    def __init__(self, config, generator):
-        from flashrag.prompt import PromptTemplate
+    CSM: CI Value Parameterization via Surrogate Model
+    Perform context selection based on the output of CSM
+    """
+    def __init__(self, config, generator, prompt_template):
+        from flashrag.refiner.csm import CSM
         super().__init__(config)
-        system_prompt = '''
-            Rank given documents based on their relevancy to the question.
-            The documents must be listed in descending order using identifiers, and the most relevant passages should be listed first.
-            Only give me the answer and do not output any other words.
-            The output format should be [] > [] > etc, e.g., [1] > [4] > [8] > [3] > [6] > [10] > [9] > [2] > [5] > [7].
-        '''
-        system_prompt += "\nThe following are given documents, each indicated by number identifier [].\n\n{reference}"
-        user_prompt = "Question: {question}\nThe ranking result(only identifiers) is:"
-        self.prompt_template = PromptTemplate(
-            config,
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-        )
+        self.config = config
+        self.model_type = config['csm_model_type']
         self.generator = generator
-        self.topk = config["refiner_topk"]
+        self.prompt_template = prompt_template
+        self.csm = CSM(config, generator=self.generator, prompt_template=self.prompt_template)
+        self.csm_save_dir = config['model2path']['csm']
 
-    def batch_run(self, dataset):
-        input_prompts = [
-            self.prompt_template.get_string(question=q, retrieval_result=r)
-            for q, r in zip(dataset.question, dataset.retrieval_result)
-        ]
-        pred_list = self.generator.generate(input_prompts, max_new_tokens=64)
-        # TODO post processing preds
+    @torch.no_grad()
+    def batch_run(self, dataset, batch_size=16, topk=None):
         retrieval_results = dataset.retrieval_result
-        retrieval_results = [
+        context_lists = [
             ["\n".join(doc_item["contents"].split("\n")[1:]) for doc_item in item_result]
             for item_result in retrieval_results
         ]
+        self.csm.load_model(self.csm_save_dir)
+        context_score = self.csm.predict(dataset.question, context_lists, batch_size=batch_size, device=self.device)
+        dataset.update_output('refine_score', context_score)
+        
         retain_lists = []
-
-        # TODO post processing preds
-        retrieval_results = dataset.retrieval_result
-        retrieval_results = [
-            ["\n".join(doc_item["contents"].split("\n")[1:]) for doc_item in item_result]
-            for item_result in retrieval_results
-        ]
-        results = []
-        for pred, retrieval_result in zip(pred_list, retrieval_results):
-            try:
-                numbers = re.findall(r'\[(\d+)\]', pred)
-                numbers = [int(num) for num in numbers]
-                if self.topk > 0:
-                    topk_numbers = numbers[:self.topk] if len(numbers) >= self.topk else numbers
+        for context_scores, context_list in zip(context_score, context_lists):
+            assert len(context_scores) == len(context_list)
+            # sort contexts according to context_scores, and select topk if topk is not None
+            if topk is None:
+                select_idxs = [idx for idx, score in enumerate(context_scores) if score > 0]
+                retain_lists.append([context_list[idx] for idx in select_idxs if idx < len(context_list)])
+            else:
+                if topk == 0:
+                    retain_lists.append([])
                 else:
-                    topk_numbers = numbers[self.topk:] if len(numbers) >= abs(self.topk) else numbers
-            except:
-                topk_numbers = [1,2,3,4,5]
-            topk_texts = []
-            for num in topk_numbers:
-                if 1 <= num <= len(retrieval_result):
-                    topk_texts.append(retrieval_result[num-1])
-            results.append("\n".join(topk_texts))
-
-        return results
+                    if topk > 0:
+                        select_idxs = torch.topk(torch.Tensor(context_scores), min(topk, len(context_scores))).indices.tolist()
+                    else:
+                        select_idxs = torch.topk(torch.Tensor([-score for score in context_scores]), min(abs(topk), len(context_scores))).indices.tolist()
+                    retain_lists.append([context_list[idx] for idx in select_idxs if idx < len(context_list)])
+        res = ["\n".join(contexts) for contexts in retain_lists]
+        return res
+    

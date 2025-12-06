@@ -22,8 +22,6 @@ if __name__ == '__main__':
         'llama3-8B-instruct': f'{root_dir}/ckpt/Llama-3.1-8B-Instruct',
         'qwen2.5-7b-instruct': f'{root_dir}/ckpt/Qwen2.5-7B-Instruct',
         'bert': f'{root_dir}/ckpt/bert-base-uncased',
-        'list_selector': f'{root_dir}/ckpt/{args.data_name}_list_selector.pth',
-        'bge-reranker': f'{root_dir}/ckpt/bge-reranker-v2-m3',
     }
 
     config_dict = {
@@ -41,7 +39,7 @@ if __name__ == '__main__':
         'retrieval_cache_path': f'{root_dir}/data/csm/retrieval_cache/{data_name}_{args.mode}.json',
         'retrieval_method': args.retriever,
         'retrieval_topk': args.retrieval_topk,
-        'test_sample_num': 100,
+        'test_sample_num': 1000,
     }
 
     config = Config(

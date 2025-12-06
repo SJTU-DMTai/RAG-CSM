@@ -13,24 +13,22 @@ if __name__ == '__main__':
     args.add_argument('--root_dir', type=str)
     args.add_argument('--data_name', type=str, default='nq',
                       choices=['nq', 'triviaqa', 'webqa', 'hotpotqa', '2wikimultihopqa', 'asqa', 'fever', 'truthful_qa'])
-    args.add_argument('--generator', type=str, default='qwen2.5-7b-instruct',
-                      choices=['llama3-8B-instruct', 'qwen2.5-7b-instruct'])
-    args.add_argument('--gpu_id', type=int, default=1)
+    args.add_argument('--generator', type=str, default='llama3-8B-instruct')
+    args.add_argument('--gpu_id', type=str, default='2')
     args.add_argument('--mode', type=str, default='test')
     args.add_argument('--retriever', type=str, default='e5')
-    args.add_argument('--refiner', type=str, default='oracle_ci')
+    args.add_argument('--refiner', type=str, default='csm')
     args.add_argument('--retrieval_topk', type=int, default=10)
     args = args.parse_args()
     
     data_name = args.data_name
     root_dir = args.root_dir
-    gen_dir = 'llama' if 'llama' in args.generator else 'qwen'
+    gen_dir = 'llama'
     model2path = {
         'e5': f'{root_dir}/ckpt/e5-base-v2',
         'llama3-8B-instruct': f'{root_dir}/ckpt/Llama-3.1-8B-Instruct',
-        'qwen2.5-7b-instruct': f'{root_dir}/ckpt/Qwen2.5-7B-Instruct',
         'bert': f'{root_dir}/ckpt/bert-base-uncased',
-        'bge-reranker': f'{root_dir}/ckpt/bge-reranker-v2-m3',
+        'csm': f'{root_dir}/ckpt/csm/{data_name}_{gen_dir}_csm_st',
     }
 
     system_prompt, user_prompt, max_new_tokens, metrics, gen_batch_size = \
@@ -53,7 +51,12 @@ if __name__ == '__main__':
         'retrieval_topk': args.retrieval_topk,
         # --- refiner ---
         'refiner_name': args.refiner,
-        'refiner_score_path': f'{root_dir}/data/csm/refiner_score/{gen_dir}/{data_name}_{args.mode}.json',
+        'refiner_score_path': f'{root_dir}/data/csm/refiner_scores/{gen_dir}/{data_name}_{args.mode}_ci.json',
+        # --- csm model conf ---
+        'refiner_local_hidden_size': 768,
+        'refiner_global_layers': 3,
+        'refiner_global_hidden_size': 1024,
+        'refiner_num_heads': 32,
         # --- generator ---
         'generator_model': args.generator,
         'generator_batch_size': gen_batch_size,
@@ -61,7 +64,7 @@ if __name__ == '__main__':
         'metrics': metrics,
         'max_new_tokens': max_new_tokens,
         'save_intermediate_data': False,
-        'test_sample_num': 100,
+        'test_sample_num': 1000,
     }
     print('---runing context selection rag---')
     print(f'---dataset: {data_name}, generator: {args.generator}---')

@@ -11,7 +11,7 @@ warnings.filterwarnings('ignore')
 if __name__ == '__main__':
     args = argparse.ArgumentParser()
     args.add_argument('--root_dir', type=str)
-    args.add_argument('--data_name', type=str, default='truthful_qa',
+    args.add_argument('--data_name', type=str, default='nq',
                       choices=['nq', 'triviaqa', 'webqa', 'hotpotqa', '2wikimultihopqa', 'asqa', 'fever', 'truthful_qa'])
     args.add_argument('--generator', type=str, default='llama3-8B-instruct',
                       choices=['llama3-8B-instruct', 'qwen2.5-7b-instruct'])
@@ -28,7 +28,6 @@ if __name__ == '__main__':
         'llama3-8B-instruct': f'{root_dir}/ckpt/Llama-3.1-8B-Instruct',
         'qwen2.5-7b-instruct': f'{root_dir}/ckpt/Qwen2.5-7B-Instruct',
         'bert': f'{root_dir}/ckpt/bert-base-uncased',
-        'bge-reranker': f'{root_dir}/ckpt/bge-reranker-v2-m3',
     }
 
     system_prompt, user_prompt, max_new_tokens, metrics, gen_batch_size = \
@@ -56,7 +55,7 @@ if __name__ == '__main__':
         'metrics': metrics,
         'max_new_tokens': max_new_tokens,
         'save_intermediate_data': False,
-        'test_sample_num': 100,
+        'test_sample_num': 1000,
     }
 
     print('---runing standard rag---')

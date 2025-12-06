@@ -117,44 +117,14 @@ def get_judger(config):
 
 
 def get_refiner(config, retriever=None, generator=None, prompt_template=None):
-    # 预定义默认路径字典
-    DEFAULT_PATH_DICT = {
-        "recomp_abstractive_nq": "fangyuan/nq_abstractive_compressor",
-        "recomp:abstractive_tqa": "fangyuan/tqa_abstractive_compressor",
-        "recomp:abstractive_hotpotqa": "fangyuan/hotpotqa_abstractive",
-    }
     REFINER_MODULE = importlib.import_module("flashrag.refiner")
 
     refiner_name = config["refiner_name"]
-    refiner_path = (
-        config["refiner_model_path"]
-        if config["refiner_model_path"] is not None
-        else DEFAULT_PATH_DICT.get(refiner_name, None)
-    )
 
-    try:
-        model_config = AutoConfig.from_pretrained(refiner_path)
-        arch = model_config.architectures[0].lower()
-        print(arch)
-    except Exception as e:
-        print("Warning", e)
-        model_config, arch = "", ""
-
-    if "recomp" in refiner_name:
-        if model_config.model_type == "t5":
-            refiner_class = "AbstractiveRecompRefiner"
-        else:
-            refiner_class = "ExtractiveRefiner"
-    elif "oracle_ci" in refiner_name:
+    if "ci" in refiner_name:
         return getattr(REFINER_MODULE, "CIRefiner")(config, generator, prompt_template)
-    elif "rankgpt" in refiner_name:
-        return getattr(REFINER_MODULE, "RankGPTRefiner")(config, generator)
-    elif "random" in refiner_name:
-        refiner_class = "RandomRefiner"
-    elif 'bert' in arch:
-        refiner_class = "ExtractiveRefiner"
-    elif 'T5' in arch or 'Bart' in arch:
-        refiner_class = "AbstractiveRecompRefiner"
+    elif "csm" in refiner_name:
+        return getattr(REFINER_MODULE, "CSMRefiner")(config, generator, prompt_template)
     elif "lingua" in refiner_name:
         refiner_class = "LLMLinguaRefiner"
     elif "selective-context" in refiner_name or "sc" in refiner_name:
